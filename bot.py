@@ -31,21 +31,22 @@ def get_latest_video():
     if not video_id:
         return None
 
-    return f"https://www.youtube.com/watch?v={video_id}"
+    link = f"https://www.youtube.com/watch?v={video_id}"
+    thumbnail = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+    return link, thumbnail
 
 
-def send_to_telegram(link):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+def send_to_telegram(link, thumbnail):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
 
     data = {
         "chat_id": TELEGRAM_CHANNEL,
-        "text": link,
-        "link_preview_options": (
-            '{"is_disabled": false, "prefer_large_media": true}'
-        )
+        "photo": thumbnail,
+        "caption": link
     }
 
-    response = requests.post(url, data=data, timeout=30)
+    response = requests.post(url, data=data, timeout=60)
     response.raise_for_status()
 
     result = response.json()
@@ -55,28 +56,29 @@ def send_to_telegram(link):
 
 
 def main():
-    latest_video = get_latest_video()
+    video = get_latest_video()
 
-    if not latest_video:
+    if not video:
         print("No video found.")
         return
 
+    link, thumbnail = video
     previous_video = ""
 
     if os.path.exists(LAST_VIDEO_FILE):
         with open(LAST_VIDEO_FILE, "r", encoding="utf-8") as file:
             previous_video = file.read().strip()
 
-    if latest_video == previous_video:
+    if link == previous_video:
         print("Video already posted.")
         return
 
-    send_to_telegram(latest_video)
+    send_to_telegram(link, thumbnail)
 
     with open(LAST_VIDEO_FILE, "w", encoding="utf-8") as file:
-        file.write(latest_video)
+        file.write(link)
 
-    print(f"Posted successfully: {latest_video}")
+    print(f"Posted video and thumbnail: {link}")
 
 
 if __name__ == "__main__":
