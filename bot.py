@@ -1,84 +1,152 @@
 import os
+import re
+import time
 import requests
-import xml.etree.ElementTree as ET
 
-CHANNEL_ID = "UC3YkcqEaQQKjYmGdZ0gDnAg"
-TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHANNEL = "@Zenoxer_yt"
+TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
-FEED_URL = f"https://www.youtube.com/feeds/videos.xml?channel_id={CHANNEL_ID}"
-LAST_VIDEO_FILE = "last_video.txt"
+API = f"https://api.telegram.org/bot{TOKEN}"
+session = requests.Session()
 
 
-def get_latest_video():
-    response = requests.get(FEED_URL, timeout=30)
-    response.raise_for_status()
+def get_video_id(link):
+    patterns = [
+        r"(?:youtube\.com/watch\?.*?v=)([A-Za-z0-9_-]{11})",
+        r"youtu\.be/([A-Za-z0-9_-]{11})",
+        r"youtube\.com/shorts/([A-Za-z0-9_-]{11})",
+        r"youtube\.com/embed/([A-Za-z0-9_-]{11})",
+        r"youtube\.com/live/([A-Za-z0-9_-]{11})",
+    ]
 
-    root = ET.fromstring(response.content)
+    for pattern in patterns:
+        match = re.search(pattern, link)
 
-    ns = {
-        "yt": "http://www.youtube.com/xml/schemas/2015",
-        "atom": "http://www.w3.org/2005/Atom"
-    }
+        if match:
+            return match.group(1)
 
-    entry = root.find("atom:entry", ns)
-
-    if entry is None:
-        return None
-
-    video_id = entry.findtext("yt:videoId", namespaces=ns)
-
-    if not video_id:
-        return None
-
-    link = f"https://www.youtube.com/watch?v={video_id}"
-    thumbnail = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-
-    return link, thumbnail
+    return None
 
 
-def send_to_telegram(link, thumbnail):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+def send_message(chat_id, text):
+    session.post(
+        f"{API}/sendMessage",
+        data={
+            "chat_id": chat_id,
+            "text": text
+        },
+        timeout=30
+    )
 
-    data = {
-        "chat_id": TELEGRAM_CHANNEL,
-        "photo": thumbnail,
-        "caption": link
-    }
 
-    response = requests.post(url, data=data, timeout=60)
-    response.raise_for_status()
+def send_thumbnail(chat_id, video_id):
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
 
-    result = response.json()
+    thumbnails = [
+        f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    ]
 
-    if not result.get("ok"):
-        raise RuntimeError(f"Telegram API error: {result}")
+    for thumbnail in thumbnails:
+        try:
+            image_response = requests.get(
+                thumbnail,
+                timeout=20
+            )
+            image_response.raise_for_status()
+
+            if len(image_response.content) < 1000:
+                continue
+
+            result = session.post(
+                f"{API}/sendPhoto",
+                data={
+                    "chat_id": chat_id,
+                    "caption": video_url
+                },
+                files={
+                    "photo": (
+                        "thumbnail.jpg",
+                        image_response.content,
+                        "image/jpeg"
+                    )
+                },
+                timeout=60
+            )
+
+            data = result.json()
+
+            if data.get("ok"):
+                return
+
+        except requests.RequestException:
+            continue
+
+    send_message(
+        chat_id,
+        "دریافت تامنیل ناموفق بود. ممکن است ویدیو یا تصویر آن در دسترس نباشد."
+    )
 
 
 def main():
-    video = get_latest_video()
+    session.post(
+        f"{API}/deleteWebhook",
+        timeout=30
+    ).raise_for_status()
 
-    if not video:
-        print("No video found.")
-        return
+    offset = None
 
-    link, thumbnail = video
-    previous_video = ""
+    print("YouTube Thumbnail Bot is running...")
 
-    if os.path.exists(LAST_VIDEO_FILE):
-        with open(LAST_VIDEO_FILE, "r", encoding="utf-8") as file:
-            previous_video = file.read().strip()
+    while True:
+        try:
+            response = session.get(
+                f"{API}/getUpdates",
+                params={
+                    "offset": offset,
+                    "timeout": 30,
+                    "allowed_updates": '["message"]'
+                },
+                timeout=40
+            )
 
-    if link == previous_video:
-        print("Video already posted.")
-        return
+            response.raise_for_status()
+            updates = response.json()
 
-    send_to_telegram(link, thumbnail)
+            if not updates.get("ok"):
+                time.sleep(3)
+                continue
 
-    with open(LAST_VIDEO_FILE, "w", encoding="utf-8") as file:
-        file.write(link)
+            for update in updates["result"]:
+                offset = update["update_id"] + 1
 
-    print(f"Posted video and thumbnail: {link}")
+                message = update.get("message", {})
+                chat = message.get("chat", {})
+                chat_id = chat.get("id")
+                text = message.get("text", "")
+
+                if not chat_id or not text:
+                    continue
+
+                if text.startswith("/start"):
+                    send_message(
+                        chat_id,
+                        "سلام! لینک ویدیوی یوتیوب رو بفرست تا تامنیلش رو برات ارسال کنم."
+                    )
+                    continue
+
+                video_id = get_video_id(text)
+
+                if video_id:
+                    send_thumbnail(chat_id, video_id)
+                else:
+                    send_message(
+                        chat_id,
+                        "لطفاً یک لینک معتبر از ویدیوی یوتیوب بفرست."
+                    )
+
+        except (requests.RequestException, ValueError) as error:
+            print(f"Connection error: {error}")
+            time.sleep(5)
 
 
 if __name__ == "__main__":
