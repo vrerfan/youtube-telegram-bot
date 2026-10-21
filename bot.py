@@ -1,15 +1,12 @@
 import os
 import re
-import time
 import requests
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-
 API = f"https://api.telegram.org/bot{TOKEN}"
-session = requests.Session()
 
 
-def get_video_id(link):
+def get_video_id(text):
     patterns = [
         r"(?:youtube\.com/watch\?.*?v=)([A-Za-z0-9_-]{11})",
         r"youtu\.be/([A-Za-z0-9_-]{11})",
@@ -19,7 +16,7 @@ def get_video_id(link):
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, link)
+        match = re.search(pattern, text)
 
         if match:
             return match.group(1)
@@ -27,46 +24,29 @@ def get_video_id(link):
     return None
 
 
-def send_message(chat_id, text):
-    session.post(
-        f"{API}/sendMessage",
-        data={
-            "chat_id": chat_id,
-            "text": text
-        },
-        timeout=30
-    )
-
-
 def send_thumbnail(chat_id, video_id):
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-
     thumbnails = [
         f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
-        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+        f"https://i.ytimg.com/vi/{video_id}/sddefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
     ]
 
-    for thumbnail in thumbnails:
+    for thumbnail_url in thumbnails:
         try:
-            image_response = requests.get(
-                thumbnail,
-                timeout=20
-            )
-            image_response.raise_for_status()
+            response = requests.get(thumbnail_url, timeout=20)
+            response.raise_for_status()
 
-            if len(image_response.content) < 1000:
+            if len(response.content) < 5000:
                 continue
 
-            result = session.post(
-                f"{API}/sendPhoto",
-                data={
-                    "chat_id": chat_id,
-                    "caption": video_url
-                },
+            result = requests.post(
+                f"{API}/sendDocument",
+                data={"chat_id": chat_id},
                 files={
-                    "photo": (
-                        "thumbnail.jpg",
-                        image_response.content,
+                    "document": (
+                        f"{video_id}_thumbnail.jpg",
+                        response.content,
                         "image/jpeg"
                     )
                 },
@@ -81,56 +61,46 @@ def send_thumbnail(chat_id, video_id):
         except requests.RequestException:
             continue
 
-    send_message(
-        chat_id,
-        "دریافت تامنیل ناموفق بود. ممکن است ویدیو یا تصویر آن در دسترس نباشد."
+    requests.post(
+        f"{API}/sendMessage",
+        data={
+            "chat_id": chat_id,
+            "text": "متأسفانه تامنیل این ویدیو دریافت نشد."
+        },
+        timeout=30
     )
 
 
 def main():
-    session.post(
-        f"{API}/deleteWebhook",
-        timeout=30
-    ).raise_for_status()
-
     offset = None
-
-    print("YouTube Thumbnail Bot is running...")
 
     while True:
         try:
-            response = session.get(
+            response = requests.get(
                 f"{API}/getUpdates",
-                params={
-                    "offset": offset,
-                    "timeout": 30,
-                    "allowed_updates": '["message"]'
-                },
+                params={"offset": offset, "timeout": 30},
                 timeout=40
             )
-
             response.raise_for_status()
-            updates = response.json()
 
-            if not updates.get("ok"):
-                time.sleep(3)
-                continue
-
-            for update in updates["result"]:
+            for update in response.json().get("result", []):
                 offset = update["update_id"] + 1
 
                 message = update.get("message", {})
-                chat = message.get("chat", {})
-                chat_id = chat.get("id")
+                chat_id = message.get("chat", {}).get("id")
                 text = message.get("text", "")
 
                 if not chat_id or not text:
                     continue
 
                 if text.startswith("/start"):
-                    send_message(
-                        chat_id,
-                        "سلام! لینک ویدیوی یوتیوب رو بفرست تا تامنیلش رو برات ارسال کنم."
+                    requests.post(
+                        f"{API}/sendMessage",
+                        data={
+                            "chat_id": chat_id,
+                            "text": "لینک ویدیوی یوتیوب رو بفرست تا تامنیلش رو به‌صورت فایل عکس برات بفرستم."
+                        },
+                        timeout=30
                     )
                     continue
 
@@ -139,14 +109,17 @@ def main():
                 if video_id:
                     send_thumbnail(chat_id, video_id)
                 else:
-                    send_message(
-                        chat_id,
-                        "لطفاً یک لینک معتبر از ویدیوی یوتیوب بفرست."
+                    requests.post(
+                        f"{API}/sendMessage",
+                        data={
+                            "chat_id": chat_id,
+                            "text": "لطفاً لینک معتبر یوتیوب بفرست."
+                        },
+                        timeout=30
                     )
 
-        except (requests.RequestException, ValueError) as error:
-            print(f"Connection error: {error}")
-            time.sleep(5)
+        except requests.RequestException as error:
+            print(error)
 
 
 if __name__ == "__main__":
